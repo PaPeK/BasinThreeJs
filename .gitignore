@@ -1,0 +1,10 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+public/build/
+
+# misc
+.env
+*.log
