@@ -1,0 +1,28 @@
+{
+  "name": "basinthreejs",
+  "version": "1.0.0",
+  "description": "The aim is to visualize a 3D basin of a lake. At best, integrate it in [FiMoS](https://github.com/sARDINE-Colaboration/FiMoS). The code is based on the docs from three.js: https://threejs.org/manual/?q=light#en/lights",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PaPeK/BasinThreeJs.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/PaPeK/BasinThreeJs/issues"
+  },
+  "homepage": "https://github.com/PaPeK/BasinThreeJs#readme",
+  "dependencies": {
+    "lil-gui": "^0.20.0",
+    "three": "^0.177.0"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
+  }
+}

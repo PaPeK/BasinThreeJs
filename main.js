@@ -1,6 +1,7 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+// public/main.js
+import * as THREE        from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GUI }           from 'lil-gui';
 
 function main() {
 
