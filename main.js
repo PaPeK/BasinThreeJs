@@ -1,13 +1,12 @@
-// public/main.js
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { GUI } from "lil-gui";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 
 function main() {
   const canvas = document.querySelector("#c");
   const renderer = new THREE.WebGLRenderer({ antialias: true, canvas });
 
-  const fov = 45; // 45
+  const fov = 45;
   const aspect = 2; // the canvas default
   const near = 0.1;
   const far = 100;
@@ -47,7 +46,7 @@ function main() {
 
   async function loadAndAddTriangles() {
     // Fetch CSV file
-    const response = await fetch("./triangles.csv");
+    const response = await fetch("./public/triangles.csv");
     const csvText = await response.text();
 
     // Parse CSV
@@ -79,112 +78,18 @@ function main() {
     );
     geometry.setDrawRange(0, positions.length / 3); // Ensure all triangles are drawn
 
-    // Optionally, print bounding box to check location
-    geometry.computeBoundingBox();
-    geometry.center();
-
-    const bb = geometry.boundingBox;
-    const minY = bb.min.y;
-    const maxY = bb.max.y;
-
-    const center = geometry.boundingBox.getCenter(new THREE.Vector3());
-    bb.getCenter(center);
-    const size = new THREE.Vector3();
-    bb.getSize(size);
-    const maxDistance = center.distanceTo(
-      new THREE.Vector3(bb.max.x, bb.max.y, bb.max.z)
-    );
-
     // Optionally, add a wireframe for debugging
     const material = new THREE.MeshBasicMaterial({
-      //color: "#CA8",
-      vertexColors: true,
+      color: "#CA8",
       side: THREE.DoubleSide,
-	  polygonOffset:   true,
-	  polygonOffsetFactor: 1,    // pull the fill a bit further back
-	  polygonOffsetUnits:  4,
-     // wireframe: false, //turn off
+      wireframe: true,
     });
     const mesh = new THREE.Mesh(geometry, material);
-	mesh.renderOrder = 0;  
     scene.add(mesh);
 
-    //draw the white outline around edges
-    {
-      const edgesGeo = new THREE.EdgesGeometry(geometry, 1); // angle threshold
-	  const lineMat = new THREE.LineBasicMaterial({
-		color:     0xffffff,
-		depthTest: false,    // draw even if "behind" the fill
-		depthWrite: false,
-	  });
-
-      const outline = new THREE.LineSegments(edgesGeo, lineMat);
-
-	  outline.renderOrder = 1;  
-      scene.add(outline);
-    }
-
-    // give yourself plenty of room (×2 or ×3 to be safe)
-    camera.far = maxDistance * 3;
-    camera.updateProjectionMatrix();
-
-    geometry.center();
-
-    controls.target.copy(center);
-    controls.update();
-
-    // 1) get a bounding sphere for the mesh
-    const sphere = new THREE.Sphere();
-    geometry.boundingBox.getBoundingSphere(sphere);
-
-    // 2) figure out how far back the camera needs to be:
-    //    distance = radius / sin( fov/2 )
-    const fovRad = THREE.MathUtils.degToRad(camera.fov);
-    const distance = sphere.radius / Math.sin(fovRad / 2);
-
-    // 3) compute a direction vector from camera→target
-    const dir = new THREE.Vector3()
-      .subVectors(camera.position, controls.target)
-      .normalize();
-
-    // 4) place camera so that the sphere is exactly framed
-    camera.position.copy(sphere.center.clone().addScaledVector(dir, distance));
-
-    // 5) re-aim controls at the sphere’s center
-    controls.target.copy(sphere.center);
-    controls.update();
-
-    // 6) You probably want to bump the far plane, too:
-    camera.far = distance + sphere.radius * 2;
-    camera.updateProjectionMatrix();
-
-    geometry.computeVertexNormals(); // for nicer shading
-
-    //1a) compute a “value” per vertex (e.g. here we just use Y as a demo)
-    const pos = geometry.attributes.position;
-    const count = pos.count;
-    const colors = new Float32Array(count * 3);
-    for (let i = 0; i < count; ++i) {
-      const y = pos.getY(i);
-      // map y to [0,1]
-      const t = (y - minY) / (maxY - minY);
-      // use THREE.Color to lerp red→blue
-      const c = new THREE.Color().setHSL((1 - t) * 0.7, 1.0, 0.5);
-      colors[3 * i] = c.r;
-      colors[3 * i + 1] = c.g;
-      colors[3 * i + 2] = c.b;
-    }
-    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-
-    geometry.computeVertexNormals(); // for smooth shading
-
+    // Optionally, print bounding box to check location
+    geometry.computeBoundingBox();
     console.log("Triangles bounding box:", geometry.boundingBox);
-
-    console.log(
-      "Bounds:",
-      geometry.boundingBox.min.toArray(),
-      geometry.boundingBox.max.toArray()
-    );
   }
   loadAndAddTriangles();
 
