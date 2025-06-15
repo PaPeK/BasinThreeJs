@@ -1,13 +1,31 @@
 // public/main.js
+
+// Updated import paths to use the JSM versions and lil-gui package
 import * as THREE from "three";
+// CHANGED: use examples/jsm path instead of addons
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+// CHANGED: use lil-gui package instead of three/addons/libs
 import { GUI } from "lil-gui";
 
 function main() {
   const canvas = document.querySelector("#c");
   const renderer = new THREE.WebGLRenderer({ antialias: true, canvas });
 
-  const fov = 45; // 45
+  //selection buttons to switch from trianges to heatmap
+  const btnTri = document.getElementById("viewTriangles");
+  const btnHeat = document.getElementById("viewHeatmap");
+
+  // helper to toggle the “active” class
+  function setActive(btn) {
+    btnTri.classList.remove("active");
+    btnHeat.classList.remove("active");
+    btn.classList.add("active");
+  }
+
+  // set initial state
+  setActive(btnTri);
+
+  const fov = 45;
   const aspect = 2; // the canvas default
   const near = 0.1;
   const far = 100;
@@ -47,12 +65,14 @@ function main() {
 
   async function loadAndAddTriangles() {
     // Fetch CSV file
-    const response = await fetch("./triangles.csv");
+    // COMMENTED OUT: old path included ./public/
+    // const response = await fetch('./public/triangles.csv');
+    const response = await fetch("./triangles.csv"); // CHANGED: fetch from root
     const csvText = await response.text();
 
     // Parse CSV
     const lines = csvText.trim().split("\n");
-    const header = lines[0].split(",");
+    // const header = lines[0].split(','); // COMMENTED OUT: header unused
     const triangles = [];
 
     for (let i = 1; i < lines.length; i++) {
@@ -65,7 +85,7 @@ function main() {
     }
     console.log("Triangles loaded:", triangles);
 
-    // Create geometry from triangles
+    // Create BufferGeometry from triangles
     const geometry = new THREE.BufferGeometry();
     const positions = [];
     triangles.forEach((tri) => {
@@ -77,123 +97,82 @@ function main() {
       "position",
       new THREE.Float32BufferAttribute(positions, 3)
     );
-    geometry.setDrawRange(0, positions.length / 3); // Ensure all triangles are drawn
+    geometry.setDrawRange(0, positions.length / 3);
 
-    // Optionally, print bounding box to check location
+    // ===== CHANGED/ADDED: center geometry =====
     geometry.computeBoundingBox();
     geometry.center();
 
-    const bb = geometry.boundingBox;
-    const minY = bb.min.y;
-    const maxY = bb.max.y;
+    // ===== ADDED: compute per-vertex heatmap colors =====
+    const posAttr = geometry.getAttribute("position");
+    const count = posAttr.count;
+    let minY = Infinity,
+      maxY = -Infinity;
+    for (let i = 0; i < count; i++) {
+      const y = posAttr.getY(i);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+    const colors = [];
+    for (let i = 0; i < count; i++) {
+      const y = posAttr.getY(i);
+      const t = (y - minY) / (maxY - minY);
+      // map blue (0.66 hue) → red (0.0)
+      const c = new THREE.Color().setHSL(0.66 * (1 - t), 1, 0.5);
+      colors.push(c.r, c.g, c.b);
+    }
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
 
-    const center = geometry.boundingBox.getCenter(new THREE.Vector3());
-    bb.getCenter(center);
-    const size = new THREE.Vector3();
-    bb.getSize(size);
-    const maxDistance = center.distanceTo(
-      new THREE.Vector3(bb.max.x, bb.max.y, bb.max.z)
-    );
-
-    // Optionally, add a wireframe for debugging
-    const material = new THREE.MeshBasicMaterial({
-      //color: "#CA8",
+    // ===== ADDED: create two materials & meshes =====
+    const triMat = new THREE.MeshBasicMaterial({
+      color: "#CA8",
+      wireframe: true,
+      side: THREE.DoubleSide,
+    });
+    const heatMat = new THREE.MeshBasicMaterial({
       vertexColors: true,
       side: THREE.DoubleSide,
-	  polygonOffset:   true,
-	  polygonOffsetFactor: 1,    // pull the fill a bit further back
-	  polygonOffsetUnits:  4,
-     // wireframe: false, //turn off
     });
-    const mesh = new THREE.Mesh(geometry, material);
-	mesh.renderOrder = 0;  
-    scene.add(mesh);
 
-    //draw the white outline around edges
-    {
-      const edgesGeo = new THREE.EdgesGeometry(geometry, 1); // angle threshold
-	  const lineMat = new THREE.LineBasicMaterial({
-		color:     0xffffff,
-		depthTest: false,    // draw even if "behind" the fill
-		depthWrite: false,
-	  });
+    const triMesh = new THREE.Mesh(geometry, triMat);
+    const heatMesh = new THREE.Mesh(geometry, heatMat);
+    heatMesh.visible = false; // start on triangles view
 
-      const outline = new THREE.LineSegments(edgesGeo, lineMat);
+    scene.add(triMesh, heatMesh);
 
-	  outline.renderOrder = 1;  
-      scene.add(outline);
-    }
-
-    // give yourself plenty of room (×2 or ×3 to be safe)
-    camera.far = maxDistance * 3;
-    camera.updateProjectionMatrix();
-
-    geometry.center();
-
-    controls.target.copy(center);
-    controls.update();
-
-    // 1) get a bounding sphere for the mesh
-    const sphere = new THREE.Sphere();
-    geometry.boundingBox.getBoundingSphere(sphere);
-
-    // 2) figure out how far back the camera needs to be:
-    //    distance = radius / sin( fov/2 )
+    // ===== CHANGED/ADDED: fit camera to the combined geometry =====
+    geometry.computeBoundingSphere();
+    const sphere = geometry.boundingSphere;
     const fovRad = THREE.MathUtils.degToRad(camera.fov);
     const distance = sphere.radius / Math.sin(fovRad / 2);
-
-    // 3) compute a direction vector from camera→target
-    const dir = new THREE.Vector3()
-      .subVectors(camera.position, controls.target)
-      .normalize();
-
-    // 4) place camera so that the sphere is exactly framed
-    camera.position.copy(sphere.center.clone().addScaledVector(dir, distance));
-
-    // 5) re-aim controls at the sphere’s center
-    controls.target.copy(sphere.center);
+    camera.position.set(0, 0, distance * 1.2);
+    camera.near = distance - sphere.radius * 1.2;
+    camera.far = distance + sphere.radius * 1.2;
+    camera.updateProjectionMatrix();
+    controls.target.set(0, 0, 0);
     controls.update();
 
-    // 6) You probably want to bump the far plane, too:
-    camera.far = distance + sphere.radius * 2;
-    camera.updateProjectionMatrix();
+    // ===== ADDED: hook up HTML buttons to toggle views =====
+    document.getElementById("viewTriangles").addEventListener("click", () => {
+      triMesh.visible = true;
+      heatMesh.visible = false;
+      setActive(btnTri);
+    });
+    document.getElementById("viewHeatmap").addEventListener("click", () => {
+      triMesh.visible = false;
+      heatMesh.visible = true;
+      setActive(btnHeat);
+    });
 
-    geometry.computeVertexNormals(); // for nicer shading
-
-    //1a) compute a “value” per vertex (e.g. here we just use Y as a demo)
-    const pos = geometry.attributes.position;
-    const count = pos.count;
-    const colors = new Float32Array(count * 3);
-    for (let i = 0; i < count; ++i) {
-      const y = pos.getY(i);
-      // map y to [0,1]
-      const t = (y - minY) / (maxY - minY);
-      // use THREE.Color to lerp red→blue
-      const c = new THREE.Color().setHSL((1 - t) * 0.7, 1.0, 0.5);
-      colors[3 * i] = c.r;
-      colors[3 * i + 1] = c.g;
-      colors[3 * i + 2] = c.b;
-    }
-    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-
-    geometry.computeVertexNormals(); // for smooth shading
-
-    console.log("Triangles bounding box:", geometry.boundingBox);
-
-    console.log(
-      "Bounds:",
-      geometry.boundingBox.min.toArray(),
-      geometry.boundingBox.max.toArray()
-    );
+    // COMMENTED OUT: original bounding-box console (handled above)
+    // console.log('Triangles bounding box:', geometry.boundingBox);
   }
   loadAndAddTriangles();
 
   // // Example usage:
-  // loadTrianglesTexture('triangles.csv').then(texture => {
-  //     // Use the texture as needed, e.g., apply to a material
-  //     // const mat = new THREE.MeshBasicMaterial({ map: texture });
-  // });
+  // loadTrianglesTexture('triangles.csv')…  // left as-is
 
+  // Box
   {
     const cubeSize = 4;
     const cubeGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
@@ -203,6 +182,7 @@ function main() {
     scene.add(mesh);
   }
 
+  // Sphere
   {
     const sphereRadius = 3;
     const sphereWidthDivisions = 32;
@@ -231,6 +211,7 @@ function main() {
     }
   }
 
+  // Ambient light + GUI
   {
     const color = 0xffffff;
     const intensity = 1;
@@ -264,7 +245,6 @@ function main() {
     if (needResize) {
       renderer.setSize(width, height, false);
     }
-
     return needResize;
   }
 
@@ -274,12 +254,9 @@ function main() {
       camera.aspect = canvas.clientWidth / canvas.clientHeight;
       camera.updateProjectionMatrix();
     }
-
     renderer.render(scene, camera);
-
     requestAnimationFrame(render);
   }
-
   requestAnimationFrame(render);
 }
 
