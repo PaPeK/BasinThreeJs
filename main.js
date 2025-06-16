@@ -1,10 +1,37 @@
+// public/main.js
+
+// Updated import paths to use the JSM versions and lil-gui package
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+// CHANGED: use examples/jsm path instead of addons
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+// CHANGED: use lil-gui package instead of three/addons/libs
+import { GUI } from "lil-gui";
 
 function main() {
   const canvas = document.querySelector("#c");
   const renderer = new THREE.WebGLRenderer({ antialias: true, canvas });
+
+  // parameter to magnify the depth-related z values
+  const depthMagnification = 10;
+  console.warn(
+    "Using depthMagnification =",
+    depthMagnification,
+    "to scale z values for better visibility."
+  );
+
+  //selection buttons to switch from trianges to heatmap
+  const btnTri = document.getElementById("viewTriangles");
+  const btnHeat = document.getElementById("viewHeatmap");
+
+  // helper to toggle the “active” class
+  function setActive(btn) {
+    btnTri.classList.remove("active");
+    btnHeat.classList.remove("active");
+    btn.classList.add("active");
+  }
+
+  // set initial state
+  setActive(btnTri);
 
   const fov = 45;
   const aspect = 2; // the canvas default
@@ -46,25 +73,28 @@ function main() {
 
   async function loadAndAddTriangles() {
     // Fetch CSV file
-    const response = await fetch("./public/triangles.csv");
+    // COMMENTED OUT: old path included ./public/
+    // const response = await fetch('./public/triangles.csv');
+    const response = await fetch("./triangles.csv"); // CHANGED: fetch from root
     const csvText = await response.text();
 
     // Parse CSV
     const lines = csvText.trim().split("\n");
-    const header = lines[0].split(",");
+    // const header = lines[0].split(','); // COMMENTED OUT: header unused
     const triangles = [];
 
     for (let i = 1; i < lines.length; i++) {
       const values = lines[i].split(",").map(Number);
       // Each triangle has 3 points, each with x, y, z
-      const p1 = new THREE.Vector3(values[1], values[2], values[3]);
-      const p2 = new THREE.Vector3(values[4], values[5], values[6]);
-      const p3 = new THREE.Vector3(values[7], values[8], values[9]);
+      const p1 = new THREE.Vector3(values[1], values[2], depthMagnification* values[3]);
+      const p2 = new THREE.Vector3(values[4], values[5], depthMagnification* values[6]);
+      const p3 = new THREE.Vector3(values[7], values[8], depthMagnification* values[9]);
       triangles.push([p1, p2, p3]);
     }
     console.log("Triangles loaded:", triangles);
+    console.log("triangles length:", triangles.length);
 
-    // Create geometry from triangles
+    // Create BufferGeometry from triangles
     const geometry = new THREE.BufferGeometry();
     const positions = [];
     triangles.forEach((tri) => {
@@ -72,33 +102,88 @@ function main() {
         positions.push(pt.x, pt.y, pt.z);
       });
     });
+    console.log("Positions length, L_p = ", positions.length, "L_p / 3 = ", positions.length / 3, "L_p / 9 = ", positions.length / 9);
     geometry.setAttribute(
       "position",
       new THREE.Float32BufferAttribute(positions, 3)
     );
-    geometry.setDrawRange(0, positions.length / 3); // Ensure all triangles are drawn
+    geometry.setDrawRange(0, positions.length / 3);
 
-    // Optionally, add a wireframe for debugging
-    const material = new THREE.MeshBasicMaterial({
-      color: "#CA8",
-      side: THREE.DoubleSide,
-      wireframe: true,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    scene.add(mesh);
-
-    // Optionally, print bounding box to check location
+    // ===== CHANGED/ADDED: center geometry =====
     geometry.computeBoundingBox();
-    console.log("Triangles bounding box:", geometry.boundingBox);
+    geometry.center();
+    console.log("boundingBox:", geometry.boundingBox);
+
+    // ===== ADDED: compute per-vertex heatmap colors =====
+    const posAttr = geometry.getAttribute("position");
+    const count = posAttr.count;
+    let minZ = Infinity,
+      maxZ = -Infinity;
+    for (let i = 0; i < count; i++) {
+      const z = posAttr.getZ(i);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    }
+    const colors = [];
+    for (let i = 0; i < count; i++) {
+      const z = posAttr.getZ(i);
+      const t = (z - minZ) / (maxZ - minZ);
+      // map blue (0.66 hue) → red (0.0)
+      const c = new THREE.Color().setHSL(0.66 * (1 - t), 1, 0.5);
+      colors.push(c.r, c.g, c.b);
+    }
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+
+    // ===== ADDED: create two materials & meshes =====
+    const triMat = new THREE.MeshBasicMaterial({
+      color: "#CA8",
+      wireframe: true,
+      side: THREE.DoubleSide,
+    });
+    const heatMat = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+    });
+
+    const triMesh = new THREE.Mesh(geometry, triMat);
+    const heatMesh = new THREE.Mesh(geometry, heatMat);
+    heatMesh.visible = false; // start on triangles view
+
+    scene.add(triMesh, heatMesh);
+
+    // ===== CHANGED/ADDED: fit camera to the combined geometry =====
+    geometry.computeBoundingSphere();
+    const sphere = geometry.boundingSphere;
+    const fovRad = THREE.MathUtils.degToRad(camera.fov);
+    const distance = sphere.radius / Math.sin(fovRad / 2);
+    camera.position.set(0, 0, distance * 1.2);
+    camera.near = 0.1; //distance - sphere.radius * 1.2;
+    camera.far = distance + sphere.radius * 1.2;
+    camera.updateProjectionMatrix();
+    controls.target.set(0, 0, 0);
+    controls.update();
+
+    // ===== ADDED: hook up HTML buttons to toggle views =====
+    document.getElementById("viewTriangles").addEventListener("click", () => {
+      triMesh.visible = true;
+      heatMesh.visible = false;
+      setActive(btnTri);
+    });
+    document.getElementById("viewHeatmap").addEventListener("click", () => {
+      triMesh.visible = false;
+      heatMesh.visible = true;
+      setActive(btnHeat);
+    });
+
+    // COMMENTED OUT: original bounding-box console (handled above)
+    // console.log('Triangles bounding box:', geometry.boundingBox);
   }
   loadAndAddTriangles();
 
   // // Example usage:
-  // loadTrianglesTexture('triangles.csv').then(texture => {
-  //     // Use the texture as needed, e.g., apply to a material
-  //     // const mat = new THREE.MeshBasicMaterial({ map: texture });
-  // });
+  // loadTrianglesTexture('triangles.csv')…  // left as-is
 
+  // Box
   {
     const cubeSize = 4;
     const cubeGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
@@ -108,6 +193,7 @@ function main() {
     scene.add(mesh);
   }
 
+  // Sphere
   {
     const sphereRadius = 3;
     const sphereWidthDivisions = 32;
@@ -136,6 +222,7 @@ function main() {
     }
   }
 
+  // Ambient light + GUI
   {
     const color = 0xffffff;
     const intensity = 1;
@@ -169,7 +256,6 @@ function main() {
     if (needResize) {
       renderer.setSize(width, height, false);
     }
-
     return needResize;
   }
 
@@ -179,13 +265,60 @@ function main() {
       camera.aspect = canvas.clientWidth / canvas.clientHeight;
       camera.updateProjectionMatrix();
     }
-
     renderer.render(scene, camera);
-
     requestAnimationFrame(render);
   }
-
   requestAnimationFrame(render);
+
+  // ====== TOP-DOWN VIEW LOCK BUTTON ======
+  const btnLockTopDown = document.getElementById("lockTopDown");
+  let isTopDownLocked = false;
+  let savedCameraState = null;
+  let savedControlsState = null;
+  let savedMouseButtons = null;
+
+  if (btnLockTopDown) {
+    btnLockTopDown.addEventListener("click", () => {
+      if (!isTopDownLocked) {
+        // Save current camera, controls, and mouse button state
+        savedCameraState = {
+          position: camera.position.clone(),
+          up: camera.up.clone(),
+          target: controls.target.clone(),
+        };
+        savedControlsState = {
+          enableRotate: controls.enableRotate,
+          enablePan: controls.enablePan,
+        };
+        savedMouseButtons = { ...controls.mouseButtons };
+        // Set camera above, looking down
+        camera.position.set(0, 0, 50);
+        camera.up.set(0, 0, -1); // so +z is up in view
+        controls.target.set(0, 0, 0);
+        controls.enableRotate = false;
+        controls.enablePan = true;
+        controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+        controls.update();
+        camera.lookAt(controls.target);
+        isTopDownLocked = true;
+        btnLockTopDown.textContent = "Unlock Top-Down View";
+      } else {
+        // Restore previous state
+        if (savedCameraState && savedControlsState && savedMouseButtons) {
+          camera.position.copy(savedCameraState.position);
+          camera.up.copy(savedCameraState.up);
+          controls.target.copy(savedCameraState.target);
+          controls.enableRotate = savedControlsState.enableRotate;
+          controls.enablePan = savedControlsState.enablePan;
+          Object.assign(controls.mouseButtons, savedMouseButtons);
+          controls.update();
+          camera.lookAt(controls.target);
+        }
+        isTopDownLocked = false;
+        btnLockTopDown.textContent = "Lock Top-Down View";
+      }
+    });
+  }
 }
 
 main();
