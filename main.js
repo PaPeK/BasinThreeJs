@@ -11,6 +11,14 @@ function main() {
   const canvas = document.querySelector("#c");
   const renderer = new THREE.WebGLRenderer({ antialias: true, canvas });
 
+  // parameter to magnify the depth-related z values
+  const depthMagnification = 10;
+  console.warn(
+    "Using depthMagnification =",
+    depthMagnification,
+    "to scale z values for better visibility."
+  );
+
   //selection buttons to switch from trianges to heatmap
   const btnTri = document.getElementById("viewTriangles");
   const btnHeat = document.getElementById("viewHeatmap");
@@ -78,12 +86,13 @@ function main() {
     for (let i = 1; i < lines.length; i++) {
       const values = lines[i].split(",").map(Number);
       // Each triangle has 3 points, each with x, y, z
-      const p1 = new THREE.Vector3(values[1], values[2], values[3]);
-      const p2 = new THREE.Vector3(values[4], values[5], values[6]);
-      const p3 = new THREE.Vector3(values[7], values[8], values[9]);
+      const p1 = new THREE.Vector3(values[1], values[2], depthMagnification* values[3]);
+      const p2 = new THREE.Vector3(values[4], values[5], depthMagnification* values[6]);
+      const p3 = new THREE.Vector3(values[7], values[8], depthMagnification* values[9]);
       triangles.push([p1, p2, p3]);
     }
     console.log("Triangles loaded:", triangles);
+    console.log("triangles length:", triangles.length);
 
     // Create BufferGeometry from triangles
     const geometry = new THREE.BufferGeometry();
@@ -93,6 +102,7 @@ function main() {
         positions.push(pt.x, pt.y, pt.z);
       });
     });
+    console.log("Positions length, L_p = ", positions.length, "L_p / 3 = ", positions.length / 3, "L_p / 9 = ", positions.length / 9);
     geometry.setAttribute(
       "position",
       new THREE.Float32BufferAttribute(positions, 3)
@@ -102,21 +112,22 @@ function main() {
     // ===== CHANGED/ADDED: center geometry =====
     geometry.computeBoundingBox();
     geometry.center();
+    console.log("boundingBox:", geometry.boundingBox);
 
     // ===== ADDED: compute per-vertex heatmap colors =====
     const posAttr = geometry.getAttribute("position");
     const count = posAttr.count;
-    let minY = Infinity,
-      maxY = -Infinity;
+    let minZ = Infinity,
+      maxZ = -Infinity;
     for (let i = 0; i < count; i++) {
-      const y = posAttr.getY(i);
-      minY = Math.min(minY, y);
-      maxY = Math.max(maxY, y);
+      const z = posAttr.getZ(i);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
     }
     const colors = [];
     for (let i = 0; i < count; i++) {
-      const y = posAttr.getY(i);
-      const t = (y - minY) / (maxY - minY);
+      const z = posAttr.getZ(i);
+      const t = (z - minZ) / (maxZ - minZ);
       // map blue (0.66 hue) → red (0.0)
       const c = new THREE.Color().setHSL(0.66 * (1 - t), 1, 0.5);
       colors.push(c.r, c.g, c.b);
@@ -146,7 +157,7 @@ function main() {
     const fovRad = THREE.MathUtils.degToRad(camera.fov);
     const distance = sphere.radius / Math.sin(fovRad / 2);
     camera.position.set(0, 0, distance * 1.2);
-    camera.near = distance - sphere.radius * 1.2;
+    camera.near = 0.1; //distance - sphere.radius * 1.2;
     camera.far = distance + sphere.radius * 1.2;
     camera.updateProjectionMatrix();
     controls.target.set(0, 0, 0);
@@ -258,6 +269,56 @@ function main() {
     requestAnimationFrame(render);
   }
   requestAnimationFrame(render);
+
+  // ====== TOP-DOWN VIEW LOCK BUTTON ======
+  const btnLockTopDown = document.getElementById("lockTopDown");
+  let isTopDownLocked = false;
+  let savedCameraState = null;
+  let savedControlsState = null;
+  let savedMouseButtons = null;
+
+  if (btnLockTopDown) {
+    btnLockTopDown.addEventListener("click", () => {
+      if (!isTopDownLocked) {
+        // Save current camera, controls, and mouse button state
+        savedCameraState = {
+          position: camera.position.clone(),
+          up: camera.up.clone(),
+          target: controls.target.clone(),
+        };
+        savedControlsState = {
+          enableRotate: controls.enableRotate,
+          enablePan: controls.enablePan,
+        };
+        savedMouseButtons = { ...controls.mouseButtons };
+        // Set camera above, looking down
+        camera.position.set(0, 0, 50);
+        camera.up.set(0, 0, -1); // so +z is up in view
+        controls.target.set(0, 0, 0);
+        controls.enableRotate = false;
+        controls.enablePan = true;
+        controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+        controls.update();
+        camera.lookAt(controls.target);
+        isTopDownLocked = true;
+        btnLockTopDown.textContent = "Unlock Top-Down View";
+      } else {
+        // Restore previous state
+        if (savedCameraState && savedControlsState && savedMouseButtons) {
+          camera.position.copy(savedCameraState.position);
+          camera.up.copy(savedCameraState.up);
+          controls.target.copy(savedCameraState.target);
+          controls.enableRotate = savedControlsState.enableRotate;
+          controls.enablePan = savedControlsState.enablePan;
+          Object.assign(controls.mouseButtons, savedMouseButtons);
+          controls.update();
+          camera.lookAt(controls.target);
+        }
+        isTopDownLocked = false;
+        btnLockTopDown.textContent = "Lock Top-Down View";
+      }
+    });
+  }
 }
 
 main();
