@@ -22,6 +22,15 @@ function main() {
   //selection buttons to switch from trianges to heatmap
   const btnTri = document.getElementById("viewTriangles");
   const btnHeat = document.getElementById("viewHeatmap");
+  const btnLoadTriangles = document.getElementById("loadTriangles");
+  const btnLoadTrack = document.getElementById("loadTrack");
+  const btnLoadPoints = document.getElementById("loadPoints");
+
+  // Variables to store current meshes so we can remove them when loading new ones
+  let triMesh = null;
+  let heatMesh = null;
+  let trackGroup = null; // Group to hold spheres and lines for 3D track
+  let pointsGroup = null; // Group to hold individual points without lines
 
   // helper to toggle the “active” class
   function setActive(btn) {
@@ -71,16 +80,30 @@ function main() {
 
   // }
 
-  async function loadAndAddTriangles() {
-    // Fetch CSV file
-    // COMMENTED OUT: old path included ./public/
-    // const response = await fetch('./public/triangles.csv');
-    const response = await fetch("./triangles.csv"); // CHANGED: fetch from root
-    const csvText = await response.text();
+  async function loadAndAddTriangles(csvContent = null) {
+    // Remove existing meshes if they exist
+    if (triMesh) {
+      scene.remove(triMesh);
+      triMesh.geometry.dispose();
+      triMesh.material.dispose();
+    }
+    if (heatMesh) {
+      scene.remove(heatMesh);
+      heatMesh.geometry.dispose();
+      heatMesh.material.dispose();
+    }
+
+    let csvText;
+    if (csvContent) {
+      csvText = csvContent;
+    } else {
+      // Fetch CSV file from default location
+      const response = await fetch("./triangles.csv");
+      csvText = await response.text();
+    }
 
     // Parse CSV
     const lines = csvText.trim().split("\n");
-    // const header = lines[0].split(','); // COMMENTED OUT: header unused
     const triangles = [];
 
     for (let i = 1; i < lines.length; i++) {
@@ -111,8 +134,13 @@ function main() {
 
     // ===== CHANGED/ADDED: center geometry =====
     geometry.computeBoundingBox();
-    geometry.center();
-    console.log("boundingBox:", geometry.boundingBox);
+    // Center geometry and save the shift applied
+    // short version: geometry.center(); // but this does not save the shift
+    const boundingBox = geometry.boundingBox;
+    const center = boundingBox.getCenter(new THREE.Vector3());
+    geometry.translate(-center.x, -center.y, -center.z);
+    window.meshCenterShift = { x: center.x, y: center.y, z: center.z }; // global variable
+    console.log("window.meshCenterShift:", window.meshCenterShift);
 
     // ===== ADDED: compute per-vertex heatmap colors =====
     const posAttr = geometry.getAttribute("position");
@@ -145,8 +173,8 @@ function main() {
       side: THREE.DoubleSide,
     });
 
-    const triMesh = new THREE.Mesh(geometry, triMat);
-    const heatMesh = new THREE.Mesh(geometry, heatMat);
+    triMesh = new THREE.Mesh(geometry, triMat);
+    heatMesh = new THREE.Mesh(geometry, heatMat);
     heatMesh.visible = false; // start on triangles view
 
     scene.add(triMesh, heatMesh);
@@ -157,28 +185,173 @@ function main() {
     const fovRad = THREE.MathUtils.degToRad(camera.fov);
     const distance = sphere.radius / Math.sin(fovRad / 2);
     camera.position.set(0, 0, distance * 1.2);
-    camera.near = 0.1; //distance - sphere.radius * 1.2;
+    camera.near = 0.1;
     camera.far = distance + sphere.radius * 1.2;
     camera.updateProjectionMatrix();
     controls.target.set(0, 0, 0);
     controls.update();
 
-    // ===== ADDED: hook up HTML buttons to toggle views =====
-    document.getElementById("viewTriangles").addEventListener("click", () => {
-      triMesh.visible = true;
-      heatMesh.visible = false;
-      setActive(btnTri);
-    });
-    document.getElementById("viewHeatmap").addEventListener("click", () => {
-      triMesh.visible = false;
-      heatMesh.visible = true;
-      setActive(btnHeat);
-    });
-
-    // COMMENTED OUT: original bounding-box console (handled above)
-    // console.log('Triangles bounding box:', geometry.boundingBox);
+    // Update mesh bounding box for collision detection
+    // meshBoundingBox = geometry.boundingBox.clone();
   }
   loadAndAddTriangles();
+
+  async function loadAndAddTrack(csvContent = null) {
+    // Remove existing track group if it exists
+    if (trackGroup) {
+      scene.remove(trackGroup);
+      // Dispose of all geometries and materials in the group
+      trackGroup.traverse((child) => {
+        if (child.isMesh) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        }
+        if (child.isLine) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        }
+      });
+    }
+
+    let csvText;
+    if (csvContent) {
+      csvText = csvContent;
+    } else {
+      // Fetch CSV file from default location (you can change this path)
+      const response = await fetch("./track.csv");
+      csvText = await response.text();
+    }
+
+    // Parse CSV
+    const lines = csvText.trim().split("\n");
+    const trackPoints = [];
+    const color_by_sign = [];
+
+    // Skip header row and parse points: the csv has the columns=[Fish ID,X,Y,Z,Timestamp]
+    //    * the Timestamp encodes debugging info, if it is negative, something is wrong
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(",").map(Number);
+      if (values.length >= 3) {
+        // Apply depth magnification to z-coordinate
+        const point = new THREE.Vector3(values[1], values[2], values[3] * depthMagnification);
+        trackPoints.push(point);
+        color_by_sign.push(Math.sign(values[4]));
+      }
+    }
+    console.log("Track points loaded:", trackPoints);
+    console.log("track points length:", trackPoints.length);
+
+    // Create a group to hold all spheres and lines
+    trackGroup = new THREE.Group();
+
+    // Create sphere geometry and materials
+    const sphereRadius = 0.5;
+    const sphereGeometry = new THREE.SphereGeometry(sphereRadius, 8, 6);
+    const sphereMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
+    const sphereMaterialDebug = new THREE.MeshPhongMaterial({ color: 0xff00ff });
+
+    // Create spheres for each track point
+    trackPoints.forEach((point, index) => {
+      const material = color_by_sign[index] < 0 ? sphereMaterialDebug.clone() : sphereMaterial.clone();
+      const sphere = new THREE.Mesh(sphereGeometry, material);
+      sphere.position.copy(point);
+      trackGroup.add(sphere);
+    });
+
+    // Create lines connecting consecutive track points
+    if (trackPoints.length > 1) {
+      const lineGeometry = new THREE.BufferGeometry().setFromPoints(trackPoints);
+      const lineMaterial = new THREE.LineBasicMaterial({ 
+        color: 0xff0000, 
+        linewidth: 2 
+      });
+      const line = new THREE.Line(lineGeometry, lineMaterial);
+      trackGroup.add(line);
+    }
+
+    // Add the group to the scene
+    scene.add(trackGroup);
+
+    // Center and fit camera to the track points
+    if (trackPoints.length > 0) {
+      // Calculate bounding box
+      const center = window.meshCenterShift || new THREE.Vector3(0, 0, 0);
+
+      // Center the group
+      trackGroup.position.sub(center);
+    }
+  }
+
+  async function loadAndAddPoints(csvContent = null) {
+    // Remove existing points group if it exists
+    if (pointsGroup) {
+      scene.remove(pointsGroup);
+      // Dispose of all geometries and materials in the group
+      pointsGroup.traverse((child) => {
+        if (child.isMesh) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        }
+      });
+    }
+
+    let csvText;
+    if (csvContent) {
+      csvText = csvContent;
+    } else {
+      // Fetch CSV file from default location (you can change this path)
+      const response = await fetch("./points.csv");
+      csvText = await response.text();
+    }
+
+    // Parse CSV
+    const lines = csvText.trim().split("\n");
+    const points = [];
+    const color_by_sign = [];
+
+    // skip header row and parse points: the csv has the columns=[X,Y,Z,debugFlag]
+    //    * the bug_type encodes debugging info, -1 is a different bug than 1
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(",").map(Number);
+      if (values.length >= 3) {
+        // Apply depth magnification to z-coordinate
+        const point = new THREE.Vector3(values[0], values[1], values[2] * depthMagnification);
+        points.push(point);
+        color_by_sign.push(Math.sign(values[3]));
+      }
+    }
+    console.log("Points loaded:", points);
+    console.log("points length:", points.length);
+
+    // Create a group to hold all spheres (no lines)
+    pointsGroup = new THREE.Group();
+
+    // Create sphere geometry and materials with different colors
+    const sphereRadius = 0.3;
+    const sphereGeometry = new THREE.SphereGeometry(sphereRadius, 8, 6);
+    const sphereMaterial = new THREE.MeshPhongMaterial({ color: 0x0080ff }); // Blue
+    const sphereMaterialDebug = new THREE.MeshPhongMaterial({ color: 0xffa500 }); // Orange
+
+    // Create spheres for each point (no connecting lines)
+    points.forEach((point, index) => {
+      const material = color_by_sign[index] < 0 ? sphereMaterialDebug.clone() : sphereMaterial.clone();
+      const sphere = new THREE.Mesh(sphereGeometry, material);
+      sphere.position.copy(point);
+      pointsGroup.add(sphere);
+    });
+
+    // Add the group to the scene
+    scene.add(pointsGroup);
+
+    // Center the points group
+    if (points.length > 0) {
+      // Calculate bounding box
+      const center = window.meshCenterShift || new THREE.Vector3(0, 0, 0);
+
+      // Center the group
+      pointsGroup.position.sub(center);
+    }
+  }
 
   // // Example usage:
   // loadTrianglesTexture('triangles.csv')…  // left as-is
@@ -319,6 +492,109 @@ function main() {
       }
     });
   }
+
+  // ===== ADDED: File input handler for loading triangles =====
+  function handleTriangleFileLoad() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.csv';
+    input.onchange = function(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            loadAndAddTriangles(e.target.result);
+            console.log('New triangles loaded from file:', file.name);
+          } catch (error) {
+            console.error('Error loading triangle file:', error);
+            alert('Error loading triangle file. Please check the file format.');
+          }
+        };
+        reader.readAsText(file);
+      }
+    };
+    input.click();
+  }
+
+  // Add event listener for loadTriangles button
+  if (btnLoadTriangles) {
+    btnLoadTriangles.addEventListener("click", handleTriangleFileLoad);
+  }
+
+  // ===== ADDED: File input handler for loading 3D track =====
+  function handleTrackFileLoad() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.csv';
+    input.onchange = function(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            loadAndAddTrack(e.target.result);
+            console.log('New track loaded from file:', file.name);
+          } catch (error) {
+            console.error('Error loading track file:', error);
+            alert('Error loading track file. Please check the file format.');
+          }
+        };
+        reader.readAsText(file);
+      }
+    };
+    input.click();
+  }
+
+  // Add event listener for loadTrack button
+  if (btnLoadTrack) {
+    btnLoadTrack.addEventListener("click", handleTrackFileLoad);
+  }
+
+  // ===== ADDED: File input handler for loading 3D points =====
+  function handlePointsFileLoad() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.csv';
+    input.onchange = function(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            loadAndAddPoints(e.target.result);
+            console.log('New points loaded from file:', file.name);
+          } catch (error) {
+            console.error('Error loading points file:', error);
+            alert('Error loading points file. Please check the file format.');
+          }
+        };
+        reader.readAsText(file);
+      }
+    };
+    input.click();
+  }
+
+  // Add event listener for loadPoints button
+  if (btnLoadPoints) {
+    btnLoadPoints.addEventListener("click", handlePointsFileLoad);
+  }
+
+  // ===== ADDED: hook up HTML buttons to toggle views =====
+  document.getElementById("viewTriangles").addEventListener("click", () => {
+    if (triMesh && heatMesh) {
+      triMesh.visible = true;
+      heatMesh.visible = false;
+      setActive(btnTri);
+    }
+  });
+  document.getElementById("viewHeatmap").addEventListener("click", () => {
+    if (triMesh && heatMesh) {
+      triMesh.visible = false;
+      heatMesh.visible = true;
+      setActive(btnHeat);
+    }
+  });
 }
 
 main();
